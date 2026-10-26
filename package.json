@@ -1,0 +1,29 @@
+{
+  "name": "mdkit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "app": "app.bat",
+    "ico": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/gen-ico.ps1",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "node tools/gen-css.mjs && esbuild src/app/main.ts --bundle --format=iife --target=es2022 --outfile=app/mdkit.js && esbuild src/styles/theme.css --outfile=app/theme.css"
+  },
+  "dependencies": {
+    "katex": "^0.16.22",
+    "mdast-util-from-markdown": "^2.0.2",
+    "mdast-util-frontmatter": "^2.0.1",
+    "mdast-util-gfm": "^3.1.0",
+    "mdast-util-math": "^3.0.0",
+    "micromark-extension-frontmatter": "^2.0.0",
+    "micromark-extension-gfm": "^3.0.0",
+    "micromark-extension-math": "^3.1.0"
+  },
+  "devDependencies": {
+    "@types/mdast": "^4.0.4",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

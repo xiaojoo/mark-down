@@ -1,0 +1,590 @@
+/*
+ * 主题契约：界面只认 .md-* 这一组类名，全部样式都在这个文件里。
+ * 想换皮就重写这份，不碰渲染器 —— 这是从 Typora 抄来的最重要的一条分工。
+ *
+ * 和 Typora 的一处分工不同：它用 display 切换标记，光标进出一块正文就横向跳一次；
+ * 这里标记在预览里干脆不出现（见下面 .md-meta），"点一下版面不许动"改由 JS 钉块高来保证，
+ * 也就是 main.ts 的 focusBlock(keepHeight) + heightProbe() 那条自检。
+ */
+
+:root {
+    --bg: #ffffff;
+    --fg: #2c2f33;
+    --meta: #b9bec4;
+    --meta-on: #6b7280;
+    --line: #e6e8eb;
+    --accent: #2f6fd0;
+    /* 压在 accent 上的字色：浅色三套是白，深色那套的 accent 是亮蓝，白字只有 2.5:1 */
+    --on-accent: #ffffff;
+    --code-bg: #f6f7f9;
+    --quote-bar: #d7dade;
+    --block-gap: 14px;
+    --text-max: 46rem;
+    --side-w: 240px;
+    --font-body: 16px/1.7 "Helvetica Neue", "Microsoft YaHei", sans-serif;
+}
+
+[data-theme="dark"] {
+    --bg: #1b1d20;
+    --fg: #d6d9dd;
+    --meta: #43474d;
+    --meta-on: #8b929b;
+    --line: #2c2f34;
+    --accent: #6ea3ff;
+    --on-accent: #12141a;
+    --code-bg: #232629;
+    --quote-bar: #3a3f45;
+}
+
+/* 仿书：长行、衬线、米纸。Typora 的 newsprint 就是这一族 */
+[data-theme="newsprint"] {
+    --bg: #fbf9f4;
+    --fg: #23241f;
+    --meta: #cdc7b8;
+    --meta-on: #7d7768;
+    --line: #e4dfd2;
+    --accent: #8a5a2b;
+    --code-bg: #f1ede3;
+    --quote-bar: #d8d0bd;
+    --block-gap: 18px;
+    --text-max: 40rem;
+    --font-body: 18px/1.95 "Source Serif 4", "Songti SC", SimSun, serif;
+}
+
+/* 极简：没有底色差，只靠留白和一条细线分组 */
+[data-theme="minimal"] {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --meta: #d9d9d9;
+    --meta-on: #8a8a8a;
+    --line: #efefef;
+    --accent: #1a1a1a;
+    --code-bg: #fafafa;
+    --quote-bar: #d5d5d5;
+    --block-gap: 18px;
+    --text-max: 42rem;
+    --font-body: 15px/1.8 system-ui, "Microsoft YaHei", sans-serif;
+}
+
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); }
+body { font: var(--font-body); }
+
+/*
+ * 整个窗口是 2 列 × 4 行的网格：左列 = 侧栏那一列（--side-w），右列 = 正文。
+ * 顶栏和查找条横跨两列；**侧栏从第 3 行一直占到第 4 行** —— 它的分隔线因此穿过
+ * 状态栏一直画到窗口底，底部这条天然分成左右两格，状态栏那条 1px 顶边只出现在右格里。
+ * （以前侧栏在 #main 里面，分隔线走到状态栏顶就停了，看着像底部没分栏。）
+ */
+#app { display: grid; grid-template-columns: var(--side-w) 1fr;
+    grid-template-rows: auto auto 1fr auto; height: 100vh; }
+#bar, #findbox { grid-column: 1 / -1; }
+#side { grid-column: 1; grid-row: 3 / 5; }
+#main { grid-column: 2; grid-row: 3; }
+#status { grid-column: 2; grid-row: 4; }
+/* 顶栏不画底边框（他说去掉就去了）：它和正文同为 --bg，分界靠侧栏那条竖线 + 页签那一条 */
+#bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 0 12px 0 0; }
+
+/* ---- 菜单条：照 Typora 的 Windows 菜单条 —— 无边框、悬停起底色、加速键灰在右 ---- */
+#menubar { display: flex; align-self: stretch; }
+/* 弹层要贴着它自己那个标签的左边缘，所以每个标签带一个定位父级 */
+.mb-menu { position: relative; display: flex; }
+.mb-top { padding: 7px 11px; cursor: default; font-size: 12px; }
+.mb-top:hover, .mb-top.on { background: var(--code-bg); }
+.mb-top.on { color: var(--accent); }
+/* top:100% —— 原来还要 +var(--bar-border) 是为了越过那条底边框，边框没了就贴齐。
+ * 圆角 5px 和自绘的悬停气泡（#tip）同一个数：浮层是一族，不该两种圆法。
+ * 左右内衬必须是 0 —— 上一版为了把高亮条做成内缩药丸，给面板加了 4px 左右内衬，
+ * 于是列表项右边缘离面板右边多出一条 4px 死区：鼠标往子菜单走的路上指针落进了内衬，
+ * `.mb-item:hover` 当场失效，子菜单在半路就收了（他报的这个）。
+ * 高亮条的内缩改由 .mb-item::before 画，命中区仍然整行通宽。
+ * 也不能用 overflow:hidden 兜圆角：子面板 .mb-sub 就挂在列表项里面，一 hidden 就把下级菜单裁没。
+ * box-sizing 自己写（全站没有全局 border-box）：15rem 说的就是面板含边框的宽。 */
+.mb-pop { display: none; position: absolute; top: 100%; left: 0; z-index: 30;
+    box-sizing: border-box; min-width: 15rem;
+    background: var(--bg); border: 1px solid var(--line); box-shadow: 0 6px 18px rgba(0,0,0,.14);
+    padding: 4px 0; border-radius: 5px; }
+.mb-top.on + .mb-pop { display: block; }
+/*
+ * color 必须写在 .mb-item 自己身上，不能靠继承 —— 子菜单（.mb-sub）就挂在带 sub 的那一行
+ * 里面，而 .mb-item:hover 给那一行刷的是白字：白字会一路继承进子面板，
+ * 于是"主题"悬停时，右边那列 默认/深色/仿书/极简 变成白字白底（浅色三套皮全中，
+ * 深色皮因为底色本来就深反而看不出来）。量过：悬停那一下子项 computed color
+ * = rgb(255,255,255)，而子面板底色 = rgb(255,255,255)。
+ * 写了显式 color 之后，悬停那条（0,2,0）仍然压得住自己那一行的字色，不影响反白。
+ */
+/* 列表项通宽（内衬 16 不动 → 文字离面板边框 17px），高亮条靠 ::before 内缩画 */
+.mb-item { display: flex; justify-content: space-between; gap: 18px; padding: 4px 16px;
+    font-size: 14px; cursor: default; position: relative; color: var(--fg); }
+/* 悬停的底色画在这一层：inset 左右各 4px、圆角 4，所以它既嵌在面板的 5px 圆角里面，
+ * 又不用把面板做出内衬（那会做出上面说的那条死区）。z-index:-1 让它落在面板底之上、
+ * 文字之下 —— 面板是 z-index:30 的层叠上下文，负 z 的孩子就排在这条链上。 */
+.mb-item::before { content: ''; position: absolute; inset: 0 4px; border-radius: 4px;
+    background: transparent; z-index: -1; }
+/* 反白那一对走 --on-accent / --accent：写死 #fff 的话，深色皮的亮蓝 accent 上只有 2.5:1 */
+/* 状态类动作当前选中的那一档（图片工具、换行符、主题、拼写…）：只换字色，不画勾、不加图标。
+ * 必须写在 .mb-item:hover 之前 —— 两条都是 (0,2,0)，后写的赢，悬停那一条得压得住它 */
+.mb-item.sel { color: var(--accent); }
+.mb-item:hover { color: var(--on-accent); }
+.mb-item:hover::before { background: var(--accent); }
+/* 加速键同理要写成直接孩子：光 .mb-item:hover .mb-accel 会连子面板里的加速键一起刷白 */
+.mb-item:hover > .mb-accel { color: var(--on-accent); opacity: .75; }
+.mb-item.off { color: var(--meta); }
+/* 置灰项不给反白：底色已经挪到 ::before，这里就得把它收回去（原来靠 background:none 压住） */
+.mb-item.off:hover { color: var(--meta); }
+.mb-item.off:hover::before { background: transparent; }
+.mb-accel { color: var(--meta-on); font-size: 12px; white-space: nowrap; }
+/* 下级箭头：一个画出来的图标（menu.ts 的 CHEVRON），不是字符 —— 字符归字体管，
+ * 换字体就换宽窄高低，而且坐在基线上和 14px 的标签对不齐。
+ * 槽本身用 flex 居中，svg 必须 block：inline 的话它坐基线，行高被它顶高一截。
+ * 颜色 inherit 标签（图上量的：Typora 那个箭头和它那一行标签同一个数，比加速键深一档），
+ * 所以悬停反白时它跟着字一起变白。 */
+.mb-arrow { display: flex; align-items: center; color: inherit; }
+.mb-arrow svg { display: block; }
+/* 左右各让 4px：和 ::before 那颗高亮条同一个内缩，不然分隔线比高亮条宽出一截 */
+.mb-sep { border-top: 1px solid var(--line); margin: 4px 4px; }
+/* left 就用 100%：列表项通宽，它的右边缘就是面板的右边框内缘，子面板压上那 1px 边框
+ * （gap 量到 −1）是故意的 —— 让开 1px 就在父子之间留一条谁都不属于的缝，
+ * 鼠标扫过去时 :hover 断掉，子菜单半路收起（正是这次要修的毛病）。
+ * 圆角也照父面板：5px。 */
+.mb-sub { top: -5px; left: 100%; display: none; }
+.mb-item:hover > .mb-sub { display: block; }
+/* 文档名不再在顶栏里占一条：它写在窗口标题上（main.ts 的 setDocTitle），
+ * 独立应用窗口的标题栏文字取的就是 document.title，位置正在图标右边。 */
+
+/* 查找面板：贴在正文右上角的一条，替换那一半按需出现 */
+#findbox { display: flex; align-items: center; gap: 6px; justify-content: flex-end;
+    padding: 5px 12px; border-bottom: 1px solid var(--line); background: var(--code-bg); }
+#findbox.noreplace #fr, #findbox.noreplace #fone, #findbox.noreplace #fall { display: none; }
+#findbox input { font: inherit; font-size: 13px; padding: 2px 6px; color: var(--fg);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 3px; width: 13em; }
+#findbox button { font: inherit; font-size: 12px; padding: 2px 8px; background: none;
+    border: 1px solid var(--line); border-radius: 3px; color: inherit; cursor: pointer; }
+#fcount { font-size: 12px; color: var(--meta-on); min-width: 5em; text-align: right; }
+.md-hit { background: #ffe27a; color: #111; border-radius: 2px; }
+.md-hit-current { background: #ff9f2e; outline: 1px solid var(--accent); }
+.md-hit-block { background: rgba(255, 226, 122, .12); }
+.hide { display: none !important; }
+/* 收起侧栏 = 左列宽度归零：状态栏和正文一起贴到窗口左缘，不留 240px 的洞 */
+body.no-side #app { grid-template-columns: 0 1fr; }
+body.no-side #side { display: none; }
+#bar button { font: inherit; padding: 3px 10px; background: none; border: 1px solid var(--line); border-radius: 3px; color: inherit; cursor: pointer; }
+#bar button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+#bar .grow { flex: 1; }
+
+/* #main 现在只剩正文一格（侧栏被提到 #app 的网格里，好让它的分隔线穿过状态栏） */
+#main { min-height: 0; }
+#side { border-right: 1px solid var(--line); overflow: auto; padding: 0 0 16px; font-size: 13px; }
+/*
+ * 侧栏两页的页签（照他给的那张图量的，图宽 285 → 我们这栏 240，系数 0.851）：
+ * 条高 50 → 43；下划线 4px 粗、离条底 6px、宽 84 → 72（= 一格 120 的 60%，
+ * 居中在标签底下 —— 图上它中心 83.5 和文字中心 83 重合，不是居中在整格里）。
+ * 字色：选中 #333（我们的 --fg 是 #2c2f33，同一族）、未选 #5b5b5b（我们取 --meta-on #6b7280）。
+ * 下划线用 currentColor：它跟选中那行的字永远是同一个色，换皮不用改第二处。
+ */
+#tabs { display: flex; position: sticky; top: 0; z-index: 2; background: var(--bg); }
+#tabs button { flex: 1; position: relative; height: 43px; display: grid; place-items: center;
+    font: inherit; background: none; border: 0; color: var(--meta-on); cursor: pointer; }
+#tabs button:hover { color: var(--fg); }
+#tabs button[aria-selected="true"] { color: var(--fg); }
+#tabs button::after { content: ''; position: absolute; left: 50%; translate: -50%; bottom: 6px;
+    width: 60%; height: 4px; border-radius: 2px; background: currentColor; opacity: 0; }
+#tabs button[aria-selected="true"]::after { opacity: 1; }
+#side a { display: block; padding: 2px 12px; color: var(--fg); text-decoration: none; opacity: .8;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#side a:hover { opacity: 1; color: var(--accent); }
+#side a.on { color: var(--accent); opacity: 1; }
+/* 12px：和顶栏菜单、状态栏图标、搜索框同一档（图上量的这行墨迹 12px = 13px 字号的汉字） */
+#side .hint { padding: 2px 12px; color: var(--meta); font-size: 12px; }
+#toc a.lv2 { padding-left: 26px; }
+#toc a.lv3 { padding-left: 40px; }
+#find { font: inherit; font-size: 12px; padding: 3px 6px; width: 14em; min-width: 0; flex: 0 1 auto;
+    color: var(--fg); background: none; border: 1px solid var(--line); border-radius: 3px; }
+
+#scroll { overflow: auto; height: 100%; }
+/*
+ * 底下原来留 40vh，是为了"任何一块都能滚到屏幕中间"—— 代价是**短文档也永远有一条滚动条**。
+ * 量过（1200×800 的窗口）：正文 9 块共 574px，#scroll 高 740；
+ * 下内衬 0 或 40px 时 scrollHeight 740 = clientHeight 740（不出条），
+ * 下内衬 320px（=40vh）时 scrollHeight 908 → 多出 168px，条就是这么来的。
+ * 所以这里改成和顶上一样的 28px；要那份"滚到中间"的余量是打字机模式的事，
+ * 它自己有一条 padding-bottom: 45vh（opt-in，开着才会有条）。
+ */
+#write { max-width: var(--text-max); margin: 0 auto; padding: 28px 24px; }
+
+/*
+ * 滚动条：只留滑块，轨底透明（"不要背景"）。三处共用一套外观 ——
+ * 正文纵向、目录纵向、代码块与源码模式的横向，它们是同一条线，不该三种样子。
+ * 滑块收窄靠**透明边框 + background-clip: content-box**，不是给轨道上色：
+ * 轨道一上色就又是"有背景"。颜色全走令牌，换皮跟着换。
+ * scrollbar-width/color 那两行是给 Firefox 的（它不认 ::-webkit-scrollbar）；
+ * Chromium 里两样都写时按 ::-webkit-* 画，所以两边都得写、且取同一个色。
+ */
+#scroll, #side, .md-code-block { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+#scroll::-webkit-scrollbar, #side::-webkit-scrollbar, .md-code-block::-webkit-scrollbar {
+    width: 10px; height: 10px; background: transparent; }
+#scroll::-webkit-scrollbar-track, #side::-webkit-scrollbar-track, .md-code-block::-webkit-scrollbar-track {
+    background: transparent; border: 0; }
+#scroll::-webkit-scrollbar-thumb, #side::-webkit-scrollbar-thumb, .md-code-block::-webkit-scrollbar-thumb {
+    background: var(--line); border: 3px solid transparent; border-radius: 5px;
+    background-clip: content-box; min-width: 24px; min-height: 28px; }
+#scroll::-webkit-scrollbar-thumb:hover, #side::-webkit-scrollbar-thumb:hover,
+.md-code-block::-webkit-scrollbar-thumb:hover { background: var(--quote-bar); background-clip: content-box; }
+#scroll::-webkit-scrollbar-corner, .md-code-block::-webkit-scrollbar-corner { background: transparent; }
+
+/*
+ * 状态栏 = 底部右格（#app 的网格里 grid-column: 2），所以它天生不占左边那一列：
+ * 那条 1px 顶边只出现在右格里，左列的分隔线（#side 的右边框）从上面一直穿过它画到窗口底
+ * —— 这就是"分成左右两栏"。图标盒从格子左缘起、自己 10px 内衬让墨迹落在 250，
+ * 离缝 10px（他那张 Typora 图量的是 13px，同一族）。字数仍贴右缘（那颗 .grow 撑开）。
+ * 收起侧栏时左列宽度归零（body.no-side #app），这一格自己就贴到窗口左缘，不用另调内衬。
+ */
+/*
+ * 图标之间的缝：容器 gap 归 0，让每颗按钮的盒子(32 宽)自己挨着自己 ——
+ * 墨迹到墨迹 = 10 + 10 = 20px，正是他那张 Typora 图上量的 20（我们原来是 14 + 20 = 34）。
+ * 盒子贴边还有额外好处：图标之间不再有点不到的死区。
+ * 右边那两段文字（字数 / 诊断）本来靠同一个 gap 隔开，现在自己补 14px 左边距，节奏不变。
+ */
+#status { border-top: 1px solid var(--line); padding: 0 12px 0 0; font-size: 12px;
+    display: flex; align-items: center; gap: 0; color: var(--meta-on); position: relative; }
+/* 侧栏收着的时候，那颗折叠图标掉头成"放回来"——图标不许说谎 */
+body.no-side #st-side svg { transform: rotate(180deg); }
+#status button { font: 12px/1 ui-monospace, Consolas, monospace; padding: 6px 10px;
+    background: none; border: 0; color: inherit; cursor: pointer; }
+#status button:hover { background: var(--code-bg); color: var(--fg); }
+#status button[aria-pressed="true"] { color: var(--accent); background: var(--code-bg); }
+/* 图标按钮里的 svg 必须 block：inline 的话它坐在基线上，底下多出 descender 那一截，
+ * 整条状态栏跟着长高（实测 25px → 27px，那颗按钮 24 → 26）。
+ * 改这一行前后各量一次 #status 的高，四颗按钮的中心要仍然相同（都是 788）。 */
+#status button svg { display: block; }
+#status .grow { flex: 1; }
+#status .dim { color: var(--meta); margin-left: 14px; }
+/* 窄窗口里状态栏不许折成两行（折一次，栏就高一行）：宁可截断 */
+#status span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/*
+ * 目录弹层：占**左列那一格**，并且一路开到底 —— 下沿就是窗口底（bottom: 0）。
+ * 原来它坐在状态栏那条顶边上面（bottom: calc(100% + 1px)），于是面板底下留了一条
+ * 25px 的空带（他圈出来的那一行）；左列现在归侧栏，那条带子里什么都没有，纯属空。
+ * 右缘压在侧栏分隔线那一个像素列上（239..240），上下连成一条；下边不画线（窗口底就是边）。
+ * box-sizing 必须自己写：全站没有全局 border-box（默认 content-box），
+ * 不写的话 width 算的是内容宽，加两条边框又错开 2px。
+ */
+#dirpop { position: absolute; bottom: 0; left: calc(-1 * var(--side-w));
+    display: none; box-sizing: border-box; width: var(--side-w); background: var(--bg);
+    border: 1px solid var(--line); border-bottom: 0;
+    box-shadow: 0 -6px 18px rgba(0,0,0,.14); padding: 4px 0; z-index: 30; }
+/* 侧栏收起时左列宽度归零，#status 从窗口左缘起算，面板也就跟着回到 0（不然会被推出屏外） */
+body.no-side #dirpop { left: 0; }
+#dirpop.on { display: block; }
+#dirpop .sec { padding: 8px 12px 4px; font-size: 11px; letter-spacing: .06em; color: var(--meta-on); }
+#dirpop button { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
+    padding: 5px 12px; font: inherit; background: none; border: 0; color: var(--fg); cursor: pointer; }
+#dirpop button:hover { background: var(--code-bg); }
+#dirpop .none { padding: 5px 12px; color: var(--meta); }
+/* 栏宽定死之后长名字不许把面板撑宽：省出省略号的位置，自己裁 */
+#dirpop button svg { flex: 0 0 auto; }
+#dirpop button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/*
+ * 自绘的悬停气泡（替代原生 title 那个系统气泡）：一个尖角指着它说的那颗图标。
+ * 尖角是一个转 45° 的小方块，只留朝外的两条边 —— 用 ::after 而不是画在背景上，
+ * 这样它的描边和气泡自己是同一条线，换皮不用改第二处。
+ * pointer-events:none —— 它不许接走鼠标，否则手一停上去气泡就把自己弄没了。
+ */
+#tip { position: fixed; z-index: 40; display: none; max-width: 22em; padding: 4px 9px;
+    font-size: 12px; line-height: 1.5; color: var(--fg); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 5px; box-shadow: 0 4px 14px rgba(0,0,0,.16);
+    pointer-events: none; white-space: nowrap; }
+#tip.on { display: block; }
+#tip::after { content: ''; position: absolute; left: calc(var(--arrow, 50%) - 4px); bottom: -4.5px;
+    width: 8px; height: 8px; background: var(--bg); transform: rotate(45deg);
+    border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+/* 气泡翻到图标下面时，尖角换到上沿：还是转 45°，露的改成朝上的那两条边 */
+#tip.below::after { top: -4.5px; bottom: auto; border-right: 0; border-bottom: 0;
+    border-left: 1px solid var(--line); border-top: 1px solid var(--line); }
+
+/* ---------------------------------------------------------------- 块 */
+
+.md-block { position: relative; margin: 0 0 var(--block-gap); outline: none; cursor: text; }
+/* 最后一块的块间距同样是纯余量：底下那道缝应当只剩 padding 那 28px，和上面一致 */
+#write > .md-block:last-child { margin-bottom: 0; }
+.md-block:focus-visible { box-shadow: inset 2px 0 0 var(--accent); }
+.md-paragraph-block { white-space: pre-wrap; overflow-wrap: anywhere; }
+.md-heading-block { font-weight: 600; line-height: 1.35; margin-bottom: 10px; }
+.md-h1 { font-size: 1.9em; }
+.md-h2 { font-size: 1.55em; }
+.md-h3 { font-size: 1.28em; }
+.md-h4, .md-h5, .md-h6 { font-size: 1.1em; }
+.md-blockquote-block { border-left: 3px solid var(--quote-bar); padding-left: 12px; color: var(--meta-on); }
+
+/* 提示块：Typora/GitHub 的 > [!NOTE] 一族。标记本身仍由 .md-meta 管显隐 */
+.md-alert { --pad-v: 8px; border-left: 4px solid var(--accent); background: var(--code-bg);
+    border-radius: 0 3px 3px 0; padding: var(--pad-v) 12px; color: var(--fg); }
+.md-alert::before { display: block; font-weight: 700; font-size: .85em; letter-spacing: .04em;
+    text-transform: uppercase; margin-bottom: 2px; }
+.md-alert-note::before { content: "说明"; color: var(--accent); }
+.md-alert-tip::before { content: "提示"; color: #2da44e; }
+.md-alert-important::before { content: "重要"; color: #6f42c1; }
+.md-alert-warning::before { content: "警告"; color: #bf8700; }
+.md-alert-caution::before { content: "危险"; color: #d1242f; }
+.md-list-block { list-style: none; padding: 0; margin: 0; }
+.md-listItem { margin: 0 0 4px; white-space: pre-wrap; }
+.md-code-block { --pad-v: 10px; background: var(--code-bg); border-radius: 3px; padding: var(--pad-v) 12px;
+    overflow-x: auto; font: 13px/1.6 ui-monospace, Consolas, monospace; white-space: pre; }
+.md-code { display: block; margin: 0; font: inherit; }
+.md-thematicBreak-block { text-align: center; }
+.md-html-block, .md-yaml-block, .md-toml-block, .md-definition-block {
+    --pad-v: 6px; font: 12px/1.6 ui-monospace, Consolas, monospace; color: var(--meta-on);
+    background: var(--code-bg); border-radius: 3px; padding: var(--pad-v) 10px; white-space: pre-wrap; }
+
+/* 表格：块结构是 div。列宽靠内核给的 --md-cols，每行共用同一组列轨 */
+.md-table-block, .md-table { display: block; }
+.md-tableRow { display: grid; grid-template-columns: repeat(var(--md-cols, 1), minmax(0, 1fr)); }
+.md-tableCell { border: 1px solid var(--line); padding: 2px 8px; white-space: pre-wrap; }
+/* 就地编辑只开在这一层，两侧的分隔管碰不到。只留底色提示"这块在编辑"，不画环 */
+.md-body { outline: none; }
+.md-body[contenteditable] { background: var(--code-bg); border-radius: 2px; }
+
+/* ---------------------------------------------------------------- 行内 */
+
+.md-strong { font-weight: 700; }
+.md-emphasis, .md-delete { font-style: italic; }
+.md-delete { font-style: normal; text-decoration: line-through; }
+/* mdast 不给"自动链接"单独的节点（它就是 link + 一个和 URL 同名的 text 子节点），
+ * 所以没有 md-autolink 这个类可点 —— 原来那条是死选择器 */
+.md-link { color: var(--accent); }
+/* 渲染器发的就是这个类名：以前这里写的是 .md-inlineCode，一条永不命中的死规则，
+ * 所以行内代码既没等宽也没底色（computed font-family 量回来就是正文字体） */
+.md-code-inline { display: inline; font: .92em ui-monospace, Consolas, monospace;
+    background: var(--code-bg); border-radius: 2px; padding: 1px 3px; }
+.md-img { max-width: 100%; }
+.md-footnoteReference { vertical-align: super; font-size: .8em; }
+
+/*
+ * 标记：预览里整段不出现，和 Typora 预览一样 —— 阅读模式不该看见 `#`、`**`、反引号、`|`。
+ * 以前是 opacity:.35 常驻占位，为的是"显隐不改布局"；这个保证现在挪到 JS 里：
+ * 点击那一刻 main.ts 把编辑框钉成这一块预览时占的那一段高度（focusBlock 的 keepHeight），
+ * 所以下面每一块都不会因为标记进出而挪动。
+ * 悬停不显形 —— 一显形整段就要重排，鼠标划过一路抖。要看格式码就点进那块，或 Ctrl+/ 切源码。
+ */
+.md-meta { display: none; }
+
+/* 分隔线的正文是空的（`---` 全在标记里），这条线就是它渲染后的样子，也是它剩下的可点面积 */
+.md-thematicBreak-block:not(.md-editing) .md-thematicBreak { border-top: 1px solid var(--line); }
+
+/* ---------------------------------------------------------------- 模式 */
+
+/*
+ * 源码模式：一个**不换行**的整篇文本域（md-source-all）+ 左边的行号栏。
+ * 为什么不是"预览那套渲染 + 把标记显出来"：量过，做不成 —— 预览会擦掉行首的 `> `（擦掉的
+ * 字符回不来），而列表/表格/引用的子块都是块级 <div>，一行源码会被拆成三四行。
+ * 文本域保证一个字都不差；代价是没语法着色（要着色得在它后面再叠一层按行高亮的镜像）。
+ */
+#write.source { padding-left: 52px; max-width: none; }
+/* 整篇就这一块，块与块之间那道 --block-gap(14px) 落在它底下纯属多余：
+ * 它让"底下比上面多 14px"，还把这 14px 算进滚动高度（和 28px 顶内衬一起把窗口顶出条）。 */
+#write.source .md-source-all { margin-bottom: 0; }
+/* 文本域不换行、按最宽那一行撑开：两层同宽，行号才不用跟着滚 */
+#write.source .md-src { white-space: pre; width: max-content; min-width: 100%; background: transparent;
+    color: transparent; caret-color: var(--fg); position: relative; }
+#write.source .md-src::selection { background: var(--accent); }
+.md-source-all { position: relative; }
+/* 高亮层：一行一个 div，字与上面那个文本域逐字相同（判据在 test/source-hl.test.ts）。
+ * pointer-events:none —— 它不接鼠标，点击全部交给文本域。 */
+.md-src-hl { position: absolute; inset: 0; padding: 0 4px; overflow: hidden; pointer-events: none; }
+.hl-line { min-height: 1lh; white-space: pre; }
+/* 配色全走主题令牌，换皮跟着换；记号（# > ** ` |）压暗但不藏 */
+.hl-meta, .hl-quote, .hl-fence, .hl-hr, .hl-def, .hl-front { color: var(--meta-on); }
+.hl-h { color: var(--accent); font-weight: 600; }
+.hl-code { background: var(--code-bg); border-radius: 2px; }
+.hl-code-line, .hl-fence, .hl-def, .hl-front { font-family: ui-monospace, Consolas, monospace; }
+.hl-link { color: var(--accent); }
+.hl-strong { font-weight: 700; }
+.hl-em { font-style: italic; }
+.hl-del { text-decoration: line-through; }
+.hl-li { color: var(--fg); }
+
+/*
+ * 行号栏（图二左边那排 1 / 10 / 20 / 30 + 当前行那条灰带）。
+ * 号由 main.ts 的 lineMarks 发，位置用 calc(k × 1lh) 摆 —— 浏览器跟着行高走，
+ * JS 一行都不用量，打字加行也不串位。
+ */
+/* 1lh 取的是**这个元素自己**的行高：所以外层这一格必须继承文本域的字号/行高（号才摆得准），
+ * 小字号写在里面那一层 span 上。以前直接给外层写 font: 11px/1，7 行就摆成 7×18.7px（实测）。 */
+/* 绝对定位的包含块是**内边距盒**，所以有上下内衬的容器要先扣掉那一截（--pad-v 声明一次，不另抄数） */
+.md-ln, .md-ln-here { position: absolute; left: -46px; top: calc(var(--pad-v, 0px) + var(--k, 0) * 1lh); width: 38px;
+    text-align: right; user-select: none; }
+.md-ln > span, .md-ln-here > span { font: 11px/1 ui-monospace, Consolas, monospace; }
+.md-ln > span { color: var(--meta-on); }
+/* 光标那一行：号显出来 + 底下一道灰带。CSS 不知道光标在哪，--k 由 main.ts 的 paintCaretLine 写 */
+.md-ln-here > span { color: var(--accent); }
+.md-band { position: absolute; left: -46px; right: -8px; top: calc(var(--pad-v, 0px) + var(--k, 0) * 1lh); height: 1lh;
+    background: var(--code-bg); z-index: -1; }   /* 压在字后面：它是"当前行"的底，不是遮罩 */
+
+.focus .md-block:not(:focus-within):not(.md-editing):hover { opacity: 1; }
+.focus .md-block:not(:focus-within):not(.md-editing) { opacity: .3; transition: opacity .18s; }
+/* 类名加在 #write 自己身上（main.ts 的 toggleView），写成 ".typewriter #write" 永远选不中 */
+#write.typewriter { padding-bottom: 45vh; }
+/* 打字机模式靠滚动位置把当前块顶到视口中线，见 main.ts 的 caretIntoView */
+
+/*
+ * 就地编辑的源码域：不要边框。纵向必须**零边框零内衬** ——
+ * 那 1px 透明边框原本只是"占位"，可它是 border-box，会从钉死的高度里偷走 2px 正文，
+ * 最后一行的下半截就正好被裁掉；边框去掉后盒子=内容，钉多少就装多少。
+ * 字号同样必须继承正文：之前写死 13px 等宽 + 上下 6px 内衬，点下去一块就跳一次高度。
+ */
+.md-src { display: block; width: 100%; box-sizing: border-box; font: inherit; color: inherit;
+    background: var(--code-bg); border: 0; border-radius: 3px;
+    padding: 0 4px; resize: none; outline: none; overflow: hidden; }
+
+/*
+ * 行内单元（一个加粗串、一段行内代码、一个链接）：占回原来那几个字的位子。
+ * vertical-align:bottom 是必须的 —— 默认的 baseline 会把这一格的下沿坐到基线上，
+ * 于是行盒底下多出 descender 那一截，整行长高。
+ * 描边走 inset 阴影：外边框会加进 border-box、把正文挤窄，inset 不动盒子。
+ */
+.md-src.md-iu { display: inline-block; width: auto; vertical-align: bottom;
+    box-shadow: inset 0 0 0 1px var(--line); }
+/* 行源码宽度的量具：插在文本域的亲爹底下继承同一套字号字重，绝对定位所以不排版（见 naturalWidth） */
+.md-measure { position: absolute; visibility: hidden; white-space: pre; }
+
+#drop { position: fixed; inset: 0; display: none; place-items: center; background: rgba(0,0,0,.06);
+    border: 2px dashed var(--accent); margin: 8px; }
+body.dragging #drop { display: grid; }
+
+/*
+ * 打印 / 导出 PDF（Typora 的 PDF 导出本质就是开一个打印窗口）。
+ * 这里把颜色重新钉死成黑字白纸 —— 屏幕上的深色主题绝不能跟着进打印机；
+ * 工具条、侧栏、状态栏、拖放罩都不该出现在纸上，源码标记也是。
+ * 这一段跟着导出一起内联，所以导出的 HTML 直接打印也成立。
+ */
+/*
+ * 自绘的"问一句"浮层：关闭未保存、恢复到、粘贴兜底共用这一颗。
+ * 原生 confirm/prompt 的底色、字号、按钮文案都归操作系统 —— 四套皮它一套都不跟，
+ * 而且在 --app 窗口里是横在屏幕中间的一坨系统灰，所以这颗必须自己画。
+ * 圆角 5px 和菜单弹层、悬停气泡同一个数：浮层是一族，不该两种圆法。
+ */
+#ask { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.28); }
+#ask .ask-box { box-sizing: border-box; width: 26rem; max-width: 90vw; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 5px; box-shadow: 0 10px 30px rgba(0,0,0,.22); padding: 14px; }
+#ask .ask-label { font-size: 13px; line-height: 1.6; color: var(--fg); }
+#ask .ask-in { box-sizing: border-box; width: 100%; margin-top: 10px; font: inherit; font-size: 13px;
+    color: var(--fg); background: var(--code-bg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; }
+#ask textarea.ask-in { resize: vertical; min-height: 6rem; }
+#ask .ask-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+/* 悬停只换底色，不长宽、不变厚、不加光圈 */
+#ask .ask-row button { font: inherit; font-size: 13px; padding: 5px 14px; border-radius: 4px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+#ask .ask-row button:hover { background: var(--code-bg); }
+#ask .ask-ok { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+#ask .ask-ok:hover { background: var(--accent); filter: brightness(.94); }
+
+
+/*
+ * 上标/下标/高亮：格式菜单那三条插的是 HTML 标签，渲染这边放行后由浏览器排版（见 render/html.ts）。
+ * mark 的浏览器默认底色是死黄色 #ff0 —— 深色皮上白字压黄底只有 2 上下，所以底色从 --accent 掺
+ * 一点到 --bg 上取、字色仍走 --fg：四套皮换下来对比度跟着令牌走，不另存一套颜色。
+ * 不给它加内衬：加 2px 就把行高顶开半像素，而这只是行内的一段颜色，不该动版面。
+ */
+.md-mark { background: color-mix(in srgb, var(--accent) 22%, var(--bg)); color: var(--fg); border-radius: 2px; }
+
+
+/*
+ * 文档标签栏（视图 › 新建标签页 / 在已打开文档间切换）。正文区于是两行：标签栏 + 滚动区，
+ * 标签栏不跟着正文一起滚。选中那条用 --accent 的一道 2px，和侧栏页签同一族（那道 4px 是它的姐姐）。
+ * 末尾的 + 和未选中页签长得一样：他定过"页签行里的按钮要常驻、且跟未选中页签同样式（不要蓝底）"。
+ */
+#main { display: grid; grid-template-rows: auto 1fr; }
+#doctabs { display: flex; align-items: stretch; min-height: 30px; background: var(--bg);
+    border-bottom: 1px solid var(--line); font-size: 12px; }
+.dt-list { display: flex; flex: 1; min-width: 0; overflow-x: auto; }
+.dt-tab { display: flex; align-items: center; gap: 6px; max-width: 14rem; padding: 0 10px; position: relative;
+    font: inherit; background: none; border: 0; border-right: 1px solid var(--line);
+    color: var(--meta-on); cursor: pointer; }
+.dt-tab span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.dt-tab:hover { color: var(--fg); }
+.dt-tab.on { color: var(--fg); }
+.dt-tab.on::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: 0; height: 2px; background: var(--accent); }
+.dt-dirty { color: var(--meta); }
+/* 关那颗角标：hover 或选中才出现，而且用 visibility —— opacity:0 是"看不见但还点得着"，那是死控件的另一半 */
+.dt-x { flex: 0 0 auto; visibility: hidden; }
+.dt-tab:hover .dt-x, .dt-tab.on .dt-x { visibility: visible; }
+.dt-tab:hover .dt-x, .dt-tab.on .dt-x { color: var(--meta-on); }
+.dt-none { padding: 0 10px; color: var(--meta); }
+#doc-new { display: grid; place-items: center; width: 30px; font: inherit; background: none;
+    border: 0; color: var(--meta-on); cursor: pointer; }
+#doc-new:hover { color: var(--fg); }
+/* 文章列表（平铺那一档）：名字是主角，来路用小字缀在后面 */
+#tree a i { font-style: normal; color: var(--meta); margin-left: 6px; font-size: 11px; }
+
+/*
+ * 帮助浮层：内容从菜单表现算（helpHtml），所以这里只管排版。
+ * 圆角 5px 和菜单弹层、悬停气泡、#ask 同一个数 —— 浮层是一族。
+ */
+#help { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.28); }
+.hp-box { position: relative; box-sizing: border-box; width: 46rem; max-width: 92vw; max-height: 84vh;
+    overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 5px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.22); padding: 18px 20px 20px; }
+.hp-box h2 { font-size: 14px; margin: 14px 0 8px; color: var(--fg); }
+.hp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 10px 18px; }
+.hp-sec h3 { font-size: 12px; margin: 0 0 4px; letter-spacing: .06em; color: var(--meta-on); }
+.hp-row { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--fg); padding: 2px 0; }
+.hp-row kbd { font: inherit; color: var(--meta-on); }
+.hp-off { margin: 0; padding-left: 18px; font-size: 12px; color: var(--meta-on); }
+.hp-note { margin-top: 12px; font-size: 12px; color: var(--meta); }
+#hp-x { position: absolute; top: 10px; right: 10px; display: grid; place-items: center; width: 24px; height: 24px;
+    font: inherit; background: none; border: 0; color: var(--meta-on); cursor: pointer; }
+#hp-x:hover { color: var(--fg); }
+
+
+/*
+ * 图片工具（编辑 › 图片工具）：默认铺满正文宽，切到"实际大小"就不许再缩。
+ * 用 body 上一个类管，两颗菜单项只是写同一个状态 —— 别在菜单里各写一份 max-width。
+ */
+body.img-natural .md-img { max-width: none; }
+
+/*
+ * 页面设置浮层：纸张是一排按钮（原生 <select> 的底色字号边框全归系统，四套皮一套都不跟），
+ * 页边距用 number 输入框。底下那行灰字就是将要写进 @page 的那一条，所见即所写。
+ */
+#pagebox { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.28); }
+.pg-box { position: relative; box-sizing: border-box; width: 26rem; max-width: 90vw; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 5px; box-shadow: 0 10px 30px rgba(0,0,0,.22); padding: 16px 18px 18px; }
+.pg-box h2 { font-size: 14px; margin: 0 0 12px; color: var(--fg); }
+.pg-lab { font-size: 12px; color: var(--meta-on); margin: 10px 0 4px; }
+.pg-sizes { display: flex; gap: 6px; }
+.pg-sizes button, #pg-ok, #pg-x { font: inherit; font-size: 13px; cursor: pointer; border: 1px solid var(--line);
+    background: var(--bg); color: var(--fg); border-radius: 4px; }
+.pg-sizes button { padding: 4px 12px; }
+.pg-sizes button:hover, #pg-ok:hover { background: var(--code-bg); }
+.pg-sizes button.on { border-color: var(--accent); color: var(--accent); }
+.pg-margins { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.pg-mm { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--meta-on); }
+.pg-mm input { box-sizing: border-box; width: 100%; font: inherit; font-size: 13px; color: var(--fg);
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }
+.pg-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
+.pg-now { font-size: 11px; color: var(--meta); }
+#pg-ok { padding: 5px 14px; }
+#pg-x { position: absolute; top: 10px; right: 10px; width: 24px; height: 24px; padding: 0; border: 0;
+    background: none; color: var(--meta-on); display: grid; place-items: center; }
+#pg-x:hover { color: var(--fg); background: none; }
+
+
+@media print {
+    :root, [data-theme] {
+        --bg: #fff; --fg: #111; --line: #ddd; --code-bg: #f5f5f5;
+        --meta-on: #666; --quote-bar: #ccc; --accent: #111;
+    }
+    html, body { height: auto; background: #fff; }
+    #app { display: block; height: auto; }
+    #bar, #side, #status, #drop, #findbox, #tip, #ask, #doctabs, #help, #pagebox { display: none !important; }
+    #main { display: block; }
+    #scroll { overflow: visible; }
+    #write { max-width: none; margin: 0; padding: 0; }
+    .md-block { break-inside: avoid; }
+    .md-code-block, .md-alert { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .md-img { max-width: 100%; }
+    @page { margin: 18mm 16mm; }
+}

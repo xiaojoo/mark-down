@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mdkit</title>
+<!-- 应用图标：他点的「井号」那一版（纸色底 + 墨色 #，四笔带斜势），这一轮按他说的把 # 缩小了一圈
+     （绕中心 12,12 收 0.8，线宽跟着收到 2.4）。
+     独立应用窗口的标题栏/任务栏那颗图标取的就是这个 favicon，所以它是**唯一的几何出处**：
+     tools/gen-ico.ps1 直接读这一行的 d 和 stroke-width 来画 .ico，不再抄第二份坐标。
+     路径一律写成绝对坐标 M x y L x y（不用 h/v），那边只按数字对切就能解析。 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%23f4f1ea'/%3E%3Cg fill='none' stroke='%2323272b' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M10.3 5.88L8.94 18.12M15.06 5.88L13.7 18.12M6.22 9.96L17.78 9.96M5.54 14.04L17.1 14.04'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="stylesheet" href="theme.css">
+    <!-- KaTeX 的字体由这份 CSS 从 app/katex/fonts/ 读：本地文件，不走网络，也不占 mdkit.js 的体积 -->
+    <link rel="stylesheet" href="katex/katex.min.css">
+</head>
+<body>
+<div id="app">
+  <div id="bar">
+    <nav id="menubar"></nav>
+    <span class="grow"></span>
+    <input id="find" type="search" placeholder="在文件夹里搜，回车">
+  </div>
+  <div id="findbox" class="hide noreplace">
+    <input id="fq" type="search" placeholder="查找">
+    <span id="fcount"></span>
+    <button id="fprev" title="上一个（Shift+Enter）">↑</button>
+    <button id="fnext" title="下一个（Enter）">↓</button>
+    <input id="fr" type="text" placeholder="替换为">
+    <button id="fone">替换</button>
+    <button id="fall">全部替换</button>
+    <button id="fx" title="关闭（Esc）">✕</button>
+  </div>
+  <nav id="side">
+    <div id="tabs">
+      <button data-tab="file" aria-selected="true">文件</button>
+      <button data-tab="toc" aria-selected="false">大纲</button>
+    </div>
+    <div id="tree"></div>
+    <div id="toc" class="hide"></div>
+    <div id="hits"></div>
+  </nav>
+  <div id="main">
+    <div id="doctabs"></div>
+    <div id="scroll"><div id="write"></div></div>
+  </div>
+  <div id="status"></div>
+</div>
+<div id="drop">松手打开这个 .md</div>
+<input id="opener" type="file" accept=".md,.markdown,.txt" hidden>
+<script src="mdkit.js"></script>
+</body>
+</html>

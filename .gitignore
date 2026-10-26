@@ -1,0 +1,16 @@
+# 依赖与构建产物：npm install && npm run build 就能再生，不进库
+node_modules/
+app/mdkit.js
+app/theme.css
+app/katex/
+
+# 一次性跑测留下的日志
+v.log
+*.log
+
+# 桌面快捷方式与启动器 profile（机器相关，含本机绝对路径）
+*.lnk
+.userdata/
+
+.DS_Store
+Thumbs.db
