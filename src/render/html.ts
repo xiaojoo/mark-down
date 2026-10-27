@@ -131,6 +131,8 @@ interface Ctx {
     text: string
     /* 正在编辑的最小单元（见 UNITS）：命中它就把那一段换成文本域，别处照常渲染 */
     edit: Mark | null
+    /* 提示块首行的 `[!NOTE]`：这一段按标记发，只在那一个文本节点上生效 */
+    cut?: { at: number, len: number } | null
 }
 const NO_CTX: Ctx = { marks: [], current: null, text: '', edit: null }
 
@@ -210,6 +212,15 @@ function renderInline(s: Span, ctx: Ctx): string {
         const shown = displayText(n.body)
         const cs = s.start + n.open.length
         const plain = shown.length === n.body.length
+        /* 提示块那一串 `[!NOTE]` 落进 .md-meta，剩下的照常；被切过的节点不再算 data-plain
+         * （显示长度和源码长度已经不是一回事了） */
+        if (ctx.cut && ctx.cut.at === cs) {
+            const head = n.body.slice(0, ctx.cut.len)
+            const rest = n.body.slice(ctx.cut.len)
+            const shownRest = displayText(rest)
+            return meta(n.open) + `<span class="md-text"${at(s)}>` + meta(head)
+                + marked(rest, shownRest, cs + ctx.cut.len, ctx) + '</span>' + meta(n.close)
+        }
         /* data-plain 管的是**选区**能不能按字符数换算回源码（只认逐字符等长的格子）；
          * 高亮走 displayMap，续行上被擦掉的 `>` 也能算回来，所以两者不能合并成一个判据 */
         return meta(n.open) + `<span class="md-text"${at(s)}${plain ? ' data-plain="1"' : ''}>`
@@ -274,6 +285,14 @@ function alertKind(n: Node): string {
     return ALERTS.includes(k) ? k : ''
 }
 
+/** `[!NOTE]` 那一串在正文里的位置与长度：它是标记，该进 .md-meta 而不是露在预览里 */
+function alertCut(s: Span): { at: number, len: number } | null {
+    const t = s.kids[0]?.kids[0]
+    if (!t || t.node.type !== 'text') return null
+    const m = /^\[!(\w+)\][ \t]*\n?/.exec(t.node.body)
+    return m ? { at: t.start + t.node.open.length, len: m[0].length } : null
+}
+
 function renderBlock(s: Span, ctx: Ctx): string {
     const n = s.node
     const eu = UNITS.has(n.type) ? ' md-eu' : ''
@@ -306,15 +325,18 @@ function renderBlock(s: Span, ctx: Ctx): string {
             + `<span class="md-body" data-b="${cs},${ce}">${kids(s, ctx)}</span>${meta(n.close)}</div>`
     }
     /* 级别类名挂在**块外层**上：编辑态没有里面这层 div，挂在里面的话
-     * 点下去 textarea 就退回正文字号（h1 是 1.9em），41px 的框里飘一行 16px 的字 */
+     * 点下去 textarea 就退回正文字号（h1 是 1.9em），41px 的框里飘一行 16px 的字。
+     * 提示块的角标同理：`.md-alert` 挂里面，点成"整块编辑"时那层没了，"说明"二字就消失
+     * —— 他报的"有时候点一下说明没了"。两类都挂外层，预览与编辑态就是同一张脸。 */
     let cls = (n.type === 'heading' ? 'md-heading' : `md-${n.type}`) + eu
-    const a = alertKind(n)
-    if (a) cls += ` md-alert md-alert-${a}`
     /* 表格列数由内核数出来交给主题（--md-cols）：每行各排各的 grid 会列宽不齐，
      * 实测同一列在三行里分别在 350 / 395 / 347 px。外观仍然只在 CSS 里决定。 */
     const cols = n.type === 'table'
         ? ` style="--md-cols:${n.children[0]?.children.length ?? 1}"` : ''
-    return `<div class="${cls}"${at(s)}${cols}>${meta(n.open)}${kids(s, ctx)}${meta(n.close)}</div>`
+    /* 提示块：把 `[!NOTE]` 那串按标记处理（进 .md-meta，预览里连位置都不占），
+     * 只留外层那颗角标 —— 演示文档自己写的就是"只显示成带色的框" */
+    const body = alertKind(n) ? kids(s, { ...ctx, cut: alertCut(s) }) : kids(s, ctx)
+    return `<div class="${cls}"${at(s)}${cols}>${meta(n.open)}${body}${meta(n.close)}</div>`
 }
 
 export interface RenderOpts {
@@ -337,6 +359,10 @@ export function renderBlocks(bs: Block[], opts: RenderOpts): string {
         let cls = `md-block md-${b.node.type}-block`
         /* 级别类放外层：预览和编辑态必须同一字号（见 renderBlock 里那条注释） */
         if (b.node.type === 'heading') cls += ` md-h${headingLevel(b.node)}`
+        /* 提示块两颗类名同样放外层：挂在里面那层 div 的话，点成"整块编辑"时那层没了，
+         * "说明"那颗角标当场消失 —— 他报的"有时候点一下说明没了" */
+        const alert = alertKind(b.node)
+        if (alert) cls += ` md-alert md-alert-${alert}`
         if (marks.some(m => inBlock(b, m))) cls += ' md-hit-block'
         if (inBlock(b, cur)) cls += ' md-hit-current'
         /* 尾部空行不进 textarea（多一行空行就比预览高一截，量出来 20.4px），
@@ -351,10 +377,21 @@ export function renderBlocks(bs: Block[], opts: RenderOpts): string {
         const whole = !opts.editRange || (opts.editRange.start === b.start && opts.editRange.end === b.end)
         if (opts.editing === i && whole) {
             const isNew = b.start === b.end
+            /*
+             * 代码块：框只装正文，围栏那两行不进框。预览里围栏是藏着的（连位置都不占），
+             * 一进框就把这块顶高两行（实测 40.8 → 82px，跳的 41.2 = 正好两行）——
+             * 框和预览都只含正文那几行，点下去就不动了。围栏仍原样留在源码里：
+             * 提交只替换正文区间，逐字节往返不受影响；要改语言用源码模式（Ctrl+/）。
+             */
+            const parts = b.node.type === 'code' ? decomposeCode(shown) : null
+            const fenced = !!parts?.open
+            const boxStart = fenced ? b.start + parts!.open.length : b.start
+            const boxText = fenced ? parts!.body : shown
+            const boxEnd = boxStart + boxText.length
             return `<div class="${cls} md-editing" data-i="${i}" data-s="${b.start}" data-e="${b.end}"`
                 + `${isNew ? ' data-new="1"' : ''}>`
-                + `<textarea class="md-src" spellcheck="false" data-s="${b.start}" data-e="${b.end}"`
-                + ` data-tail="${tail}" rows="${shown.split('\n').length}">${esc(shown)}</textarea></div>`
+                + `<textarea class="md-src" spellcheck="false" data-s="${boxStart}" data-e="${boxEnd}"`
+                + ` data-tail="${fenced ? 0 : tail}" rows="${boxText.split('\n').length}">${esc(boxText)}</textarea></div>`
         }
         return `<div class="${cls}${opts.editing === i ? ' md-editing' : ''}" data-i="${i}" tabindex="0">`
             + renderNode(span(b.node, b.start), ctx) + '</div>'

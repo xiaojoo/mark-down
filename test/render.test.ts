@@ -186,6 +186,30 @@ describe('提示块', () => {
         const c = openChunked('> [!NOTE] 注意\n')
         expect(serializeChunked(c)).toBe('> [!NOTE] 注意\n')
     })
+    /* 他报的两处都在这：点成整块编辑时角标不许消失；`[!NOTE]` 是标记，不许露在预览里 */
+    it('类名在块外层：预览态与整块编辑态同一张脸', () => {
+        const src = '> [!NOTE]' + String.fromCharCode(10) + '> 提示块' + String.fromCharCode(10)
+        const c = openChunked(src)
+        const bs = blocks(c)
+        const preview = renderBlocks(bs, { text: c.text, editing: -1 })
+        const whole = renderBlocks(bs, { text: c.text, editing: 0 })
+        const outer = (html: string) => (/<div class="([^"]*)"/.exec(html) ?? ['', ''])[1]
+        expect(outer(preview)).toContain('md-alert md-alert-note')
+        expect(outer(whole)).toContain('md-alert md-alert-note')
+    })
+    it('`[!NOTE]` 那串进 md-meta：预览里不占位，正文照常显示', () => {
+        const out = render('> [!NOTE] 注意看' + String.fromCharCode(10))
+        expect(out).toContain('<span class="md-meta">[!NOTE] </span>')
+        expect(out).toContain('注意看')
+        const two = render('> [!NOTE]' + String.fromCharCode(10) + '> 提示块' + String.fromCharCode(10))
+        expect(two).toContain('<span class="md-meta">[!NOTE]' + String.fromCharCode(10) + '</span>')
+        expect(two).toContain('提示块')
+    })
+    it('反证：普通引用既不戴提示块的类，也没有可藏的标记', () => {
+        const out = render('> 普通引用' + String.fromCharCode(10))
+        expect(out).not.toContain('md-alert')
+        expect(out).not.toContain('[!')
+    })
     it('五种都认，普通引用不误认', () => {
         for (const k of ['note', 'tip', 'important', 'warning', 'caution'])
             expect(render(`> [!${k.toUpperCase()}] x\n`)).toContain(`md-alert-${k}`)
@@ -357,5 +381,69 @@ describe('行内 HTML：白名单里的标签真的排版，别的一律按字�
     it('这四篇源码逐字节回得去', () => {
         for (const src of ['x<sup>2</sup>\n', 'a <!-- 注 --> b\n', 'y<blink>z</blink>\n', 'w<mark>记</mark>\n'])
             expect(serializeChunked(openChunked(src))).toBe(src)
+    })
+})
+
+/*
+ * 段内软换行：源码里两行，预览里就得是两行。原来这条只写在 .md-paragraph-block 上，
+ * 引用没吃到 —— 两行引用在预览里并成一行，点下去编辑框又变两行（实测跳 26.81px = 一整行）。
+ * 这里钉的是「换行活到了 DOM 文本里」，CSS 那一半在 theme-sync 里钉。
+ */
+describe('段内软换行不许在预览里被并掉', () => {
+    it('引用、列表、标题里的续行都带着那个换行', () => {
+        const n = String.fromCharCode(10)
+        expect(render('> 引用一行' + n + '> 续的一行' + n)).toContain('引用一行' + n + '续的一行')
+        expect(render('- 甲' + n + '  乙的续行' + n)).toContain('甲' + n + '乙的续行')
+        /* 引用第二行不带 >（懒续行）也是一块，软换行照样留着 */
+        expect(render('> 引用一行' + n + '懒续的一行' + n)).toContain('引用一行' + n + '懒续的一行')
+    })
+    it('反证：硬断行（行尾两空格）走的仍是 <br>，不是这条路', () => {
+        const n = String.fromCharCode(10)
+        expect(render('正文  ' + n + '换行' + n)).toContain('<br class="md-br">')
+    })
+})
+
+/*
+ * 代码块的编辑框只装正文：预览里围栏不占位，围栏要是进了框，点一下这块就长两行
+ * （实测 40.8 → 82px）。钉三件事：框的区间就是正文、围栏不在框里、提交只动正文。
+ */
+describe('代码块的编辑框只含正文', () => {
+    const n = String.fromCharCode(10)
+    const src = '```ts' + n + 'let a = 1' + n + '```' + n
+    const boxOf = (range: { start: number, end: number }) => {
+        const c = openChunked(src)
+        return renderBlocks(blocks(c), { text: c.text, editing: 0, editRange: range })
+    }
+    it('整块编辑时框的区间 = 正文区间，围栏留在源码里', () => {
+        const c = openChunked(src)
+        const b = blocks(c)[0]
+        const out = boxOf({ start: b.start, end: b.end })
+        const m = /<textarea[^>]*data-s="(\d+)" data-e="(\d+)"[^>]*>([^<]*)</.exec(out)
+        expect(m).not.toBeNull()
+        const [ , s0, e0, val ] = m as unknown as string[]
+        expect([+s0, +e0]).toEqual([6, 15])                     /* ```ts 是 5 字 + 换行；正文 9 字 */
+        expect(val).toBe('let a = 1')
+        expect(out).toContain('data-s="' + b.start + '" data-e="' + b.end + '"')  /* 外层块区间仍是整块 */
+    })
+    it('框里没有围栏字符', () => {
+        const c = openChunked(src)
+        const b = blocks(c)[0]
+        expect(boxOf({ start: b.start, end: b.end }).split('<textarea')[1].split('</textarea>')[0])
+            .not.toContain('```')
+    })
+    it('改正文之后仍然逐字节往返：围栏与语言标一个字没动', () => {
+        const c = openChunked(src)
+        const b = blocks(c)[0]
+        const body = { start: 6, end: 15 }
+        const after = editChunked(c, body.start, body.end, 'let a = 2' + n + 'let b = 3')
+        expect(serializeChunked(after)).toBe('```ts' + n + 'let a = 2' + n + 'let b = 3' + n + '```' + n)
+    })
+    it('反证：未闭合的围栏（没有尾 ```）也按正文算，不吞掉块尾', () => {
+        const half = '```py' + n + 'print(1)' + n
+        const c = openChunked(half)
+        const b = blocks(c)[0]
+        const out = renderBlocks(blocks(c), { text: c.text, editing: 0, editRange: { start: b.start, end: b.end } })
+        const val = /<textarea[^>]*>([^<]*)</.exec(out)?.[1] ?? ''
+        expect(val).toBe('print(1)')
     })
 })

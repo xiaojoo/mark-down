@@ -304,11 +304,18 @@ body.no-side #dirpop { left: 0; }
 
 /* ---------------------------------------------------------------- 块 */
 
-.md-block { position: relative; margin: 0 0 var(--block-gap); outline: none; cursor: text; }
+/*
+ * 段内软换行在预览里要真的换行 —— 原来这两行只写在 .md-paragraph-block 上，
+ * 引用 / 列表 / 标题里的续行没吃到：两行引用在预览里被并成一行（27.19px），
+ * 点下去编辑框按源码显示两行（54px），于是"点一下就跳一行"（实测 Δ26.81px = 一整行）。
+ * 提到 .md-block 上让每种块都继承；\n 仍是文本里的一个字符，
+ * 所以 data-plain 那套选区换算不受影响。
+ */
+.md-block { position: relative; margin: 0 0 var(--block-gap); outline: none; cursor: text;
+    white-space: pre-wrap; overflow-wrap: anywhere; }
 /* 最后一块的块间距同样是纯余量：底下那道缝应当只剩 padding 那 28px，和上面一致 */
 #write > .md-block:last-child { margin-bottom: 0; }
 .md-block:focus-visible { box-shadow: inset 2px 0 0 var(--accent); }
-.md-paragraph-block { white-space: pre-wrap; overflow-wrap: anywhere; }
 .md-heading-block { font-weight: 600; line-height: 1.35; margin-bottom: 10px; }
 .md-h1 { font-size: 1.9em; }
 .md-h2 { font-size: 1.55em; }

@@ -298,3 +298,17 @@ describe('悬停提示走自绘气泡', () => {
         expect(THEME_CSS).toContain('#tip.below::after')
     })
 })
+
+/* 软换行那条规则必须住在 .md-block 这一层（每种块都继承），不许退回按块类型各写一份 */
+describe('软换行的规则住在哪一层', () => {
+    const css = readFileSync('src/styles/theme.css', 'utf8')
+    it('white-space: pre-wrap 在 .md-block 上', () => {
+        const block = /\.md-block\s*\{[^\}]*\}/.exec(css)?.[0] ?? ''
+        expect(block).not.toBe('')
+        expect(block).toContain('white-space: pre-wrap')
+        expect(block).toContain('overflow-wrap: anywhere')
+    })
+    it('反证：不许再按块类型各写一份（那样总会漏一种块）', () => {
+        expect(css).not.toMatch(/\.md-paragraph-block\s*\{[^\}]*white-space/)
+    })
+})
